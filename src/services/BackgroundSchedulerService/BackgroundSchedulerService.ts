@@ -2,6 +2,7 @@ import BackgroundFetch from 'react-native-background-fetch';
 import {Platform} from 'react-native';
 import {TEST_MODE} from 'env';
 import {captureMessage, captureException} from 'shared/log';
+import {PollNotifications} from 'services/PollNotificationService';
 
 const BACKGROUND_TASK_ID = 'app.covidshield.exposure-notification';
 
@@ -13,7 +14,7 @@ interface PeriodicTask {
 const DEFERRED_JOB_INTERNVAL_IN_MINUTES = 240;
 const EXACT_JOB_INTERNVAL_IN_MINUTES = 90;
 
-const registerPeriodicTask = async (task: PeriodicTask) => {
+const registerPeriodicTask = async (task: PeriodicTask, bgTaskId = BACKGROUND_TASK_ID) => {
   BackgroundFetch.configure(
     {
       minimumFetchInterval: TEST_MODE ? EXACT_JOB_INTERNVAL_IN_MINUTES : DEFERRED_JOB_INTERNVAL_IN_MINUTES,
@@ -23,19 +24,37 @@ const registerPeriodicTask = async (task: PeriodicTask) => {
       stopOnTerminate: false,
     },
     async taskId => {
-      captureMessage('runPeriodicTask', {taskId});
-      try {
-        await task();
-      } catch (error) {
-        captureException('runPeriodicTask', error);
+      switch (taskId) {
+        case 'app.covidshield.poll-notifications':
+          captureMessage('>>>>> Received POLL NOTIFICATIONS TASK');
+          try {
+            PollNotifications.checkForNotifications();
+          } catch (error) {
+            captureException('pollNotificationsException', error);
+          }
+          break;
+        default:
+          captureMessage('>>>>> Default TASK RUN');
+          captureMessage('runPeriodicTask', {taskId});
+          try {
+            await task();
+          } catch (error) {
+            captureException('runPeriodicTask', error);
+          }
+          BackgroundFetch.finish(taskId);
       }
-      BackgroundFetch.finish(taskId);
     },
   );
-  const result = await BackgroundFetch.scheduleTask({taskId: BACKGROUND_TASK_ID, delay: 0, periodic: true}).catch(
-    () => false,
-  );
+  const result = await BackgroundFetch.scheduleTask({taskId: bgTaskId, delay: 0, periodic: true}).catch(() => false);
   captureMessage('registerPeriodicTask', {result});
+
+  const pnResult = await BackgroundFetch.scheduleTask({
+    taskId: 'app.covidshield.poll-notifications',
+    delay: 0,
+    periodic: true,
+  }).catch(() => false);
+
+  captureMessage('registerPollTask', {pnResult});
 };
 
 const registerAndroidHeadlessPeriodicTask = (task: PeriodicTask) => {
