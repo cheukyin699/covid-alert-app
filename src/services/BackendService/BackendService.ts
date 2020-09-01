@@ -57,24 +57,41 @@ export class BackendService implements BackendInterface {
     const regionContentUrl = `${this.retrieveUrl}/${regionPath}`;
     captureMessage(regionContentUrl);
     const storedContent = await AsyncStorage.getItem(regionContentUrl);
-    const eTagForUrl = await AsyncStorage.getItem(`etag-${regionContentUrl}`);
-    if (storedContent && eTagForUrl) {
-      headers['If-None-Match'] = eTagForUrl;
+    const lastModified = await AsyncStorage.getItem(`last-modified-${regionContentUrl}`);
+
+    if (lastModified && storedContent) {
+      const headResponse: Response = await fetch(regionContentUrl, {method: 'HEAD', headers});
+      const responseLastModified = headResponse.headers.get('last-modified');
+      if (responseLastModified && responseLastModified === lastModified) {
+        captureMessage(`using stored content: ${responseLastModified}`);
+        return JSON.parse(storedContent);
+      }
     }
 
-    const response: Response = await fetch(regionContentUrl, {method: 'GET', headers});
+    const response = await fetch(regionContentUrl);
+    await AsyncStorage.setItem(regionContentUrl, JSON.stringify(response.json()));
+    const responseLastModified = response.headers.get('last-modified');
+    if (responseLastModified) {
+      await AsyncStorage.setItem(`last-modified-${regionContentUrl}`, responseLastModified);
+    }
+    captureMessage(JSON.stringify(response));
+    captureMessage('using downloaded content');
+    return response.json();
+
+    /*
     if (response.status === 304 && storedContent) {
       return JSON.parse(storedContent);
     } else {
       captureMessage('Saving region content');
       await AsyncStorage.setItem(regionContentUrl, JSON.stringify(response.json()));
-      const etag = response.headers.get('Etag');
+      const etag = response.headers.get('last-modified');
       captureMessage(response.toString());
       if (etag) {
-        await AsyncStorage.setItem(`etag-${regionContentUrl}`, etag);
+        await AsyncStorage.setItem(`last-modified-${regionContentUrl}`, etag);
       }
       return response.json();
     }
+    */
   }
 
   async getExposureConfiguration(): Promise<ExposureConfiguration> {
