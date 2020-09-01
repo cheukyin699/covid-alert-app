@@ -5,7 +5,7 @@ import encHex from 'crypto-js/enc-hex';
 import {ExposureConfiguration, TemporaryExposureKey} from 'bridge/ExposureNotification';
 import nacl from 'tweetnacl';
 import {getRandomBytes, downloadDiagnosisKeysFile} from 'bridge/CovidShield';
-import {blobFetch} from 'shared/fetch';
+import {blobFetch, xhrError} from 'shared/fetch';
 import {MCC_CODE} from 'env';
 import {captureMessage, captureException} from 'shared/log';
 import {getMillisSinceUTCEpoch} from 'shared/date-fns';
@@ -52,29 +52,36 @@ export class BackendService implements BackendInterface {
   }
 
   async getRegionContent(): Promise<RegionContent> {
-    const headers: any = {};
-    const regionPath = 'exposure-configuration/region.json';
-    const regionContentUrl = `${this.retrieveUrl}/${regionPath}`;
-    captureMessage(regionContentUrl);
-    const storedContent = await AsyncStorage.getItem(regionContentUrl);
-    const eTagForUrl = await AsyncStorage.getItem(`etag-${regionContentUrl}`);
-    if (storedContent && eTagForUrl) {
-      headers['If-None-Match'] = eTagForUrl;
-    }
-
-    const response: Response = await fetch(regionContentUrl, {method: 'GET', headers});
-    if (response.status === 304 && storedContent) {
-      return JSON.parse(storedContent);
-    } else {
-      captureMessage('Saving region content');
-      await AsyncStorage.setItem(regionContentUrl, JSON.stringify(response.json()));
-      const etag = response.headers.get('Etag');
-      captureMessage(response.toString());
-      if (etag) {
-        await AsyncStorage.setItem(`etag-${regionContentUrl}`, etag);
+    return new Promise(async (resolve, reject) => {
+      const headers: any = {};
+      const regionPath = 'exposure-configuration/region.json';
+      const regionContentUrl = `${this.retrieveUrl}/${regionPath}`;
+      captureMessage(regionContentUrl);
+      const storedContent = await AsyncStorage.getItem(regionContentUrl);
+      const eTagForUrl = await AsyncStorage.getItem(`etag-${regionContentUrl}`);
+      if (storedContent && eTagForUrl) {
+        headers['If-None-Match'] = eTagForUrl;
       }
-      return response.json();
-    }
+
+      const request = new XMLHttpRequest();
+      request.onload = function() {
+        if (storedContent && request.status === 304) {
+          resolve(JSON.parse(storedContent));
+        } else if (request.status >= 200 && request.status <= 299) {
+          AsyncStorage.setItem(regionContentUrl, request.responseText);
+          captureMessage('Headers.................');
+          captureMessage(request.getAllResponseHeaders());
+          captureMessage(request.getResponseHeader('etag'));
+          AsyncStorage.setItem(`etag-${regionContentUrl}`, request.getResponseHeader('etag'));
+          resolve(request.response);
+        }
+      };
+      request.onerror = function () {
+        reject(new Error('unable to download file'));
+      };
+      request.open('GET', regionContentUrl, true);
+      request.send();
+    });
   }
 
   async getExposureConfiguration(): Promise<ExposureConfiguration> {
